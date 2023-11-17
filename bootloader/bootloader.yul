@@ -639,11 +639,11 @@ object "Bootloader" {
             }
 
             /// @dev Checks whether the code hash of the Keccak256 precompile contract is correct and updates it if needed.
-            /// @dev When we upgrade to the new version of the Keccak256 precompile contract, the keccak precompile will not work correctly 
-            /// and so the upgrade it should be done before any `keccak` calls. 
+            /// @dev When we upgrade to the new version of the Keccak256 precompile contract, the keccak precompile will not work correctly
+            /// and so the upgrade it should be done before any `keccak` calls.
             function upgradeKeccakIfNeeded() {
                 let expectedCodeHash := {{KECCAK256_EXPECTED_CODE_HASH}}
-                
+
                 let actualCodeHash := getRawCodeHash(KECCAK256_ADDR(), true)
                 if iszero(eq(expectedCodeHash, actualCodeHash)) {
                     // The `mimicCallOnlyResult` requires that the first word of the data
@@ -651,11 +651,11 @@ object "Bootloader" {
                     mstore(0, 36)
                     mstore(32, {{PADDED_FORCE_DEPLOY_KECCAK256_SELECTOR}})
                     mstore(36, expectedCodeHash)
-                    
+
                     // We'll use a mimicCall to simulate the correct sender.
                     let success := mimicCallOnlyResult(
                         CONTRACT_DEPLOYER_ADDR(),
-                        FORCE_DEPLOYER(), 
+                        FORCE_DEPLOYER(),
                         0,
                         0,
                         0,
@@ -682,22 +682,52 @@ object "Bootloader" {
                     32
                 )
 
-                // In case the call to the account code storage fails, 
+                // In case the call to the account code storage fails,
                 // it most likely means that the caller did not provide enough gas for
-                // the call. 
-                // In case the caller is certain that the amount of gas provided is enough, i.e. 
+                // the call.
+                // In case the caller is certain that the amount of gas provided is enough, i.e.
                 // (`assertSuccess` = true), then we should panic.
                 if iszero(success) {
                     if assertSuccess {
                         // The call must've succeeded, but it didn't. So we revert the bootloader.
                         assertionError("getRawCodeHash failed")
                     }
-                    
+
                     // Most likely not enough gas provided, revert the current frame.
                     nearCallPanic()
                 }
 
                 ret := mload(0)
+            }
+
+            /// @dev Checks whether the code hash of the system context contract is correct and updates it if needed.
+            /// @dev The L1 contracts expect all the system logs to be present in the first boojum upgrade batch already. 
+            /// However, the old system context did not send the same system logs. Usually we upgrade system context
+            /// via an upgrade transaction, but in this case the transaction won't be even processed, because of failure to create an L2 block.
+            function upgradeSystemContextIfNeeded() {
+                let expectedCodeHash := {{SYSTEM_CONTEXT_EXPECTED_CODE_HASH}}
+                
+                let actualCodeHash := extcodehash(SYSTEM_CONTEXT_ADDR())
+                if iszero(eq(expectedCodeHash, actualCodeHash)) {
+                    // Preparing the calldata to upgrade the SystemContext contract
+                    {{UPGRADE_SYSTEM_CONTEXT_CALLDATA}}
+
+                    // We'll use a mimicCall to simulate the correct sender.
+                    let success := mimicCallOnlyResult(
+                        CONTRACT_DEPLOYER_ADDR(),
+                        FORCE_DEPLOYER(), 
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0
+                    )
+
+                    if iszero(success) {
+                        assertionError("system context upgrade fail")
+                    }
+                }
             }
 
             /// @dev Calculates the canonical hash of the L1->L2 transaction that will be
@@ -3746,6 +3776,11 @@ object "Bootloader" {
 
                 <!-- @if BOOTLOADER_TYPE=='proved_batch' -->
 
+                // This implementation of the bootloader relies on the correct version of the SystemContext
+                // and it can not be upgraded via a standard upgrade transaction, but needs to ensure 
+                // correctness itself before any transaction is executed. 
+                upgradeSystemContextIfNeeded()
+
                 // Only for the proved batch we enforce that the baseFee proposed 
                 // by the operator is equal to the expected one. For the playground batch, we allow
                 // the operator to provide any baseFee the operator wants.
@@ -3765,6 +3800,8 @@ object "Bootloader" {
                 baseFee, GAS_PRICE_PER_PUBDATA := getBaseFee(L1_GAS_PRICE, FAIR_L2_GAS_PRICE)
 
                 let SHOULD_SET_NEW_BATCH := mload(224)
+                
+                upgradeSystemContextIfNeeded()
 
                 switch SHOULD_SET_NEW_BATCH 
                 case 0 {    
